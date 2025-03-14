@@ -7,10 +7,6 @@ import axios from 'axios';
 
 // API 기본 URL 설정 (환경변수 사용)
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000/api';
-const KMA_API_URL = process.env.REACT_APP_KMA_API_URL;
-const KMA_SERVICE_KEY = process.env.REACT_APP_KMA_SERVICE_KEY;
-const FORECAST_NX = process.env.REACT_APP_FORECAST_NX || 54;
-const FORECAST_NY = process.env.REACT_APP_FORECAST_NY || 124;
 
 const WindSpeedPredictor = () => {
   // 상태 관리
@@ -58,6 +54,7 @@ const WindSpeedPredictor = () => {
   const [currentWeather, setCurrentWeather] = useState(null);
   const [weatherForecast, setWeatherForecast] = useState(null);
   const [loadingWeather, setLoadingWeather] = useState(false);
+  const [apiKeyTestResult, setApiKeyTestResult] = useState(null);
 
   // 사용자 입력값 변경 처리
   const handleInputChange = (e) => {
@@ -168,108 +165,55 @@ const WindSpeedPredictor = () => {
   };
 
   // 현재 날씨 데이터 가져오기
-   const fetchCurrentWeather = async () => {
+  const fetchCurrentWeather = async () => {
     setLoadingWeather(true);
     setError(null);
 
     try {
-      // 현재 시간 정보 생성
-      const now = new Date();
-      const baseDate = now.getFullYear() +
-        String(now.getMonth() + 1).padStart(2, '0') +
-        String(now.getDate()).padStart(2, '0');
-
-      // 매시각 40분 이전이면 이전 시각의 발표 데이터 사용
-      let baseTime;
-      if (now.getMinutes() < 40) {
-        const prevHour = new Date(now);
-        prevHour.setHours(prevHour.getHours() - 1);
-        baseTime = String(prevHour.getHours()).padStart(2, '0') + '00';
-      } else {
-        baseTime = String(now.getHours()).padStart(2, '0') + '00';
+      // 직접 기상청 API를 호출하지 않고 백엔드 API를 통해 호출
+      const response = await axios.get(`${API_BASE_URL}/weather/current`);
+      
+      // 응답 데이터 확인 및 로깅
+      console.log('Current weather API response:', response.data);
+      
+      if (!response.data) {
+        throw new Error('날씨 데이터가 비어 있습니다.');
       }
+      
+      setCurrentWeather(response.data);
 
-      // API 요청 파라미터
-      const params = {
-        serviceKey: KMA_SERVICE_KEY,
-        numOfRows: 10,
-        pageNo: 1,
-        dataType: 'JSON',
-        base_date: baseDate,
-        base_time: baseTime,
-        nx: FORECAST_NX,
-        ny: FORECAST_NY
-      };
-
-      // **콘솔 로그 추가: API 요청 URL과 파라미터 확인**
-      console.log('fetchCurrentWeather API Request URL:', `${KMA_API_URL}/getUltraSrtNcst`);
-      console.log('fetchCurrentWeather API Request Params:', params);
-
-      // API 요청
-      const response = await axios.get(`${KMA_API_URL}/getUltraSrtNcst`, { params });
-
-      // **콘솔 로그 추가: API 응답 전체 데이터 확인**
-      console.log('fetchCurrentWeather API Response:', response);
-
-      // 결과 처리
-      if (response.data.response.header.resultCode === '00') {
-        const items = response.data.response.body.items.item;
-        const weatherData = {
-          location: '인천광역시 미추홀구 용현1.4동',
-          date: baseDate,
-          time: baseTime,
-          weather: {}
-        };
-
-        // 데이터 매핑
-        for (const item of items) {
-          const category = item.category;
-          const value = item.obsrValue;
-
-          switch (category) {
-            case 'T1H': // 기온
-              weatherData.weather.temperature = parseFloat(value);
-              break;
-            case 'RN1': // 1시간 강수량
-              weatherData.weather.rainfall = parseFloat(value);
-              break;
-            case 'REH': // 습도
-              weatherData.weather.humidity = parseFloat(value);
-              break;
-            case 'WSD': // 풍속
-              weatherData.weather.windSpeed = parseFloat(value);
-              break;
-            case 'PTY': // 강수형태
-              weatherData.weather.precipitationType = getPrecipitationType(value);
-              break;
-            default:
-              break;
-          }
-        }
-
-        setCurrentWeather(weatherData);
-
-        // 현재 날씨 데이터로 입력값 업데이트
+      // 현재 날씨 데이터로 입력값 업데이트
+      if (response.data.weather) {
+        const weatherData = response.data.weather;
         setInputs(prev => ({
           ...prev,
-          avgHumidity: weatherData.weather.humidity || prev.avgHumidity,
-          minHumidity: Math.max(20, (weatherData.weather.humidity || prev.avgHumidity) - 10),
-          avgTemp: weatherData.weather.temperature || prev.avgTemp,
-          maxTemp: (weatherData.weather.temperature || prev.avgTemp) + 5,
-          minTemp: (weatherData.weather.temperature || prev.avgTemp) - 5,
-          rainfall: weatherData.weather.rainfall || prev.rainfall,
-          maxHourlyRainfall: (weatherData.weather.rainfall || prev.rainfall) / 2
+          avgHumidity: weatherData.humidity || prev.avgHumidity,
+          minHumidity: Math.max(20, (weatherData.humidity || prev.avgHumidity) - 10),
+          avgTemp: weatherData.temperature || prev.avgTemp,
+          maxTemp: (weatherData.temperature || prev.avgTemp) + 5,
+          minTemp: (weatherData.temperature || prev.avgTemp) - 5,
+          rainfall: weatherData.rainfall || prev.rainfall,
+          maxHourlyRainfall: (weatherData.rainfall || prev.rainfall) / 2
         }));
-      } else {
-        // **콘솔 로그 추가: API 에러 메시지 확인**
-        console.error('fetchCurrentWeather API Error Response Header:', response.data.response.header);
-        throw new Error(response.data.response.header.resultMsg);
       }
     } catch (err) {
       console.error('현재 날씨 데이터 조회 오류:', err);
-      // **콘솔 로그 추가: 에러 객체 전체 확인**
-      console.error('fetchCurrentWeather Error Object:', err);
-      setError('현재 날씨 데이터를 가져오지 못했습니다. API 키와 네트워크 연결을 확인하세요.');
+      
+      // 더 자세한 오류 메시지 제공
+      let errorMessage = '현재 날씨 데이터를 가져오지 못했습니다.';
+      if (err.response) {
+        console.error('Error response data:', err.response.data);
+        errorMessage += ` 서버 응답 코드: ${err.response.status}`;
+        if (err.response.data && err.response.data.detail) {
+          errorMessage += ` (${err.response.data.detail})`;
+        }
+      } else if (err.request) {
+        errorMessage += ' 서버로부터 응답이 없습니다. 네트워크 연결을 확인하세요.';
+      } else {
+        errorMessage += ` ${err.message}`;
+      }
+      
+      setError(errorMessage);
     } finally {
       setLoadingWeather(false);
     }
@@ -281,147 +225,68 @@ const WindSpeedPredictor = () => {
     setError(null);
 
     try {
-      // **[수정]: 한국 시간 기준 현재 시간**
-      const now = new Date();
-      const utcNow = new Date(now.getTime() + now.getTimezoneOffset() * 60000); // UTC로 변환
-      const koreaNow = new Date(utcNow.getTime() + 9 * 60 * 60000); // UTC+9 (한국 시간)
-
-      let baseDate = koreaNow.getFullYear() +
-        String(koreaNow.getMonth() + 1).padStart(2, '0') +
-        String(koreaNow.getDate()).padStart(2, '0');
-
-      // **[수정]: 발표 시각 목록 및 현재 시간에 맞는 base_time 설정**
-      const forecastTimes = ["0200", "0500", "0800", "1100", "1400", "1700", "2000", "2300"];
-      let baseTime;
-      const currentHour = koreaNow.getHours();
-
-      if (currentHour < 2) {
-        baseTime = "2300";
-        const yesterday = new Date(koreaNow);
-        yesterday.setDate(yesterday.getDate() - 1);
-        baseDate = yesterday.getFullYear() +
-          String(yesterday.getMonth() + 1).padStart(2, '0') +
-          String(yesterday.getDate()).padStart(2, '0');
-      } else if (currentHour < 5) {
-        baseTime = "0200";
-      } else if (currentHour < 8) {
-        baseTime = "0500";
-      } else if (currentHour < 11) {
-        baseTime = "0800";
-      } else if (currentHour < 14) {
-        baseTime = "1100";
-      } else if (currentHour < 17) {
-        baseTime = "1400";
-      } else if (currentHour < 20) {
-        baseTime = "1700";
-      } else if (currentHour < 23) {
-        baseTime = "2000";
-      } else {
-        baseTime = "2300";
+      // 직접 기상청 API를 호출하지 않고 백엔드 API를 통해 호출
+      const response = await axios.get(`${API_BASE_URL}/weather/forecast/short`);
+      
+      // 응답 데이터 확인 및 로깅
+      console.log('Short forecast API response:', response.data);
+      
+      if (!response.data) {
+        throw new Error('예보 데이터가 비어 있습니다.');
       }
+      
+      setWeatherForecast(response.data);
 
-
-      const params = {
-        serviceKey: KMA_SERVICE_KEY,
-        numOfRows: 1000,
-        pageNo: 1,
-        dataType: 'JSON',
-        base_date: baseDate,
-        base_time: baseTime,
-        nx: FORECAST_NX,
-        ny: FORECAST_NY
-      };
-
-      // **콘솔 로그 추가: API 요청 URL과 파라미터 확인**
-      console.log('fetchShortForecast API Request URL:', `${KMA_API_URL}/getVilageFcst`);
-      console.log('fetchShortForecast API Request Params:', params);
-
-      // API 요청
-      const response = await axios.get(`${KMA_API_URL}/getVilageFcst`, { params });
-
-      // **콘솔 로그 추가: API 응답 전체 데이터 확인**
-      console.log('fetchShortForecast API Response:', response);
-
-      // 결과 처리
-      if (response.data.response.header.resultCode === '00') {
-        const items = response.data.response.body.items.item;
-
-        // 날짜-시간별로 데이터 그룹화
-        const forecastData = {};
-
-        for (const item of items) {
-          const fcstDate = item.fcstDate;
-          const fcstTime = item.fcstTime;
-          const category = item.category;
-          const value = item.fcstValue;
-
-          const key = `${fcstDate}-${fcstTime}`;
-
-          if (!forecastData[key]) {
-            forecastData[key] = {
-              date: fcstDate,
-              time: fcstTime,
-              weather: {}
-            };
-          }
-
-          // 카테고리별 처리
-          switch (category) {
-            case 'TMP': // 기온
-              forecastData[key].weather.temperature = parseFloat(value);
-              break;
-            case 'REH': // 습도
-              forecastData[key].weather.humidity = parseFloat(value);
-              break;
-            case 'WSD': // 풍속
-              forecastData[key].weather.windSpeed = parseFloat(value);
-              break;
-            case 'SKY': // 하늘상태
-              forecastData[key].weather.skyCondition = getSkyCondition(value);
-              break;
-            case 'PTY': // 강수형태
-              forecastData[key].weather.precipitationType = getPrecipitationType(value);
-              break;
-            case 'POP': // 강수확률
-              forecastData[key].weather.precipitationProbability = parseInt(value);
-              break;
-            default:
-              break;
-          }
-        }
-
-        // 리스트로 변환하여 정렬
-        const forecast = {
-          location: '인천광역시 미추홀구 용현1.4동',
-          baseDate,
-          baseTime,
-          forecasts: Object.values(forecastData).sort((a, b) =>
-            `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)
-          )
-        };
-
-        setWeatherForecast(forecast);
-
-        // 첫 번째 예보 데이터로 예보 입력값 업데이트
-        if (forecast.forecasts.length > 0) {
-          const firstForecast = forecast.forecasts[0].weather;
-          setForecastInputs(prev => ({
-            ...prev,
-            avgHumidity: firstForecast.humidity || prev.avgHumidity,
-            avgTemp: firstForecast.temperature || prev.avgTemp,
-            rainfallProb: firstForecast.precipitationProbability || prev.rainfallProb
-          }));
-        }
-      } else {
-        // **콘솔 로그 추가: API 에러 메시지 확인**
-        console.error('fetchShortForecast API Error Response Header:', response.data.response.header);
-        throw new Error(response.data.response.header.resultMsg);
+      // 첫 번째 예보 데이터로 예보 입력값 업데이트
+      if (response.data.forecasts && response.data.forecasts.length > 0) {
+        const firstForecast = response.data.forecasts[0].weather;
+        setForecastInputs(prev => ({
+          ...prev,
+          avgHumidity: firstForecast.humidity || prev.avgHumidity,
+          avgTemp: firstForecast.temperature || prev.avgTemp,
+          rainfallProb: firstForecast.precipitationProbability || prev.rainfallProb
+        }));
       }
     } catch (err) {
       console.error('단기 예보 데이터 조회 오류:', err);
-      // **콘솔 로그 추가: 에러 객체 전체 확인**
-      console.error('fetchShortForecast Error Object:', err);
-      setError('단기 예보 데이터를 가져오지 못했습니다. API 키와 네트워크 연결을 확인하세요.');
+      
+      // 더 자세한 오류 메시지 제공
+      let errorMessage = '단기 예보 데이터를 가져오지 못했습니다.';
+      if (err.response) {
+        console.error('Error response data:', err.response.data);
+        errorMessage += ` 서버 응답 코드: ${err.response.status}`;
+        if (err.response.data && err.response.data.detail) {
+          errorMessage += ` (${err.response.data.detail})`;
+        }
+      } else if (err.request) {
+        errorMessage += ' 서버로부터 응답이 없습니다. 네트워크 연결을 확인하세요.';
+      } else {
+        errorMessage += ` ${err.message}`;
+      }
+      
+      setError(errorMessage);
+    } finally {
+      setLoadingWeather(false);
+    }
+  };
+
+  // API 키 테스트 함수
+  const testApiKey = async () => {
+    setLoadingWeather(true);
+    setError(null);
+    setApiKeyTestResult(null);
+    
+    try {
+      const response = await axios.get(`${API_BASE_URL}/weather/test-api-key`);
+      console.log('API Key Test Response:', response.data);
+      setApiKeyTestResult(response.data);
+    } catch (err) {
+      console.error('API 키 테스트 오류:', err);
+      setError('API 키 테스트 중 오류가 발생했습니다.');
+      setApiKeyTestResult({
+        status: 'error',
+        message: err.response?.data?.detail || '알 수 없는 오류'
+      });
     } finally {
       setLoadingWeather(false);
     }
@@ -1061,6 +926,30 @@ const WindSpeedPredictor = () => {
             </button>
           </div>
         )}
+        
+        <div className="mt-4">
+          <h3 className="text-lg font-semibold mb-2">API 키 테스트</h3>
+          <button 
+            onClick={testApiKey}
+            disabled={loadingWeather}
+            className={`px-4 py-2 rounded transition ${loadingWeather ? 'bg-gray-400' : 'bg-yellow-600 text-white hover:bg-yellow-700'}`}
+          >
+            API 키 테스트
+          </button>
+          
+          {apiKeyTestResult && (
+            <div className={`mt-2 p-3 rounded ${apiKeyTestResult.status === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+              <p><strong>상태:</strong> {apiKeyTestResult.status}</p>
+              <p><strong>메시지:</strong> {apiKeyTestResult.message}</p>
+              {apiKeyTestResult.resultCode && (
+                <p><strong>결과 코드:</strong> {apiKeyTestResult.resultCode}</p>
+              )}
+              {apiKeyTestResult.resultMsg && (
+                <p><strong>결과 메시지:</strong> {apiKeyTestResult.resultMsg}</p>
+              )}
+            </div>
+          )}
+        </div>
         
         {error && (
           <div className="mt-4 p-3 bg-red-100 text-red-700 rounded">
