@@ -45,8 +45,8 @@
 
 1. 저장소 클론:
    ```bash
-   git clone https://github.com/user/wind-speed-prediction.git
-   cd wind-speed-prediction
+   git clone https://github.com/user/wind_prediction.git
+   cd wind_prediction
    ```
 
 2. 설치 스크립트 실행:
