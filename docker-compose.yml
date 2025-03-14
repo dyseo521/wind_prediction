@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  # 백엔드 API 서비스
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+      - ./models:/app/models
+      - ./cache:/app/cache
+    environment:
+      - PYTHONUNBUFFERED=1
+      - UPLOAD_DIR=/app/uploads
+      - MODEL_DIR=/app/models
+      - CACHE_DIR=/app/cache
+    restart: unless-stopped
+
+  # 프론트엔드 서비스
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  data:
+  uploads:
+  models:
+  cache:
