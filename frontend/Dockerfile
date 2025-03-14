@@ -3,9 +3,12 @@ FROM node:16-alpine as build
 
 WORKDIR /app
 
-# 의존성 파일 복사 및 설치 (package-lock.json 없이도 동작하도록 수정)
+# 의존성 파일 복사 및 설치
 COPY package.json ./
 RUN npm install
+
+# .env 파일 복사 (React 앱은 빌드 시점에 환경변수가 필요함)
+COPY .env ./
 
 # 소스 코드 복사 및 빌드
 COPY . ./

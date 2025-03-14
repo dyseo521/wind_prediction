@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  BarChart, Bar, Cell
+  BarChart, Bar, Cell, PieChart, Pie
 } from 'recharts';
 import axios from 'axios';
 
-// API 기본 URL 설정
-const API_BASE_URL = 'http://localhost:8000/api';
+// API 기본 URL 설정 (환경변수 사용)
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000/api';
+const KMA_API_URL = process.env.REACT_APP_KMA_API_URL;
+const KMA_SERVICE_KEY = process.env.REACT_APP_KMA_SERVICE_KEY;
+const FORECAST_NX = process.env.REACT_APP_FORECAST_NX || 54;
+const FORECAST_NY = process.env.REACT_APP_FORECAST_NY || 124;
 
 const WindSpeedPredictor = () => {
   // 상태 관리
@@ -46,11 +50,14 @@ const WindSpeedPredictor = () => {
   const [selectedModel, setSelectedModel] = useState(null);
   const [forecastInputs, setForecastInputs] = useState({
     date: new Date().toISOString().split('T')[0],
-    location: '인천',
+    location: '인천광역시 미추홀구 용현1.4동',
     avgHumidity: 60,
     avgTemp: 20,
     rainfallProb: 0
   });
+  const [currentWeather, setCurrentWeather] = useState(null);
+  const [weatherForecast, setWeatherForecast] = useState(null);
+  const [loadingWeather, setLoadingWeather] = useState(false);
 
   // 사용자 입력값 변경 처리
   const handleInputChange = (e) => {
@@ -81,12 +88,58 @@ const WindSpeedPredictor = () => {
     }
   };
 
+  // 현재 날씨 데이터로 예측 수행
+  const handlePredictWithCurrentWeather = async () => {
+    if (!currentWeather) {
+      setError('먼저 현재 날씨 데이터를 가져와야 합니다.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    
+    try {
+      // 현재 날씨 데이터로 입력값 설정
+      const weatherData = currentWeather.weather;
+      const weatherInputs = {
+        avgHumidity: weatherData.humidity || 60,
+        minHumidity: Math.max(20, (weatherData.humidity || 60) - 10),
+        avgTemp: weatherData.temperature || 20,
+        maxTemp: (weatherData.temperature || 20) + 5,
+        minTemp: (weatherData.temperature || 20) - 5,
+        rainfall: weatherData.rainfall || 0,
+        maxHourlyRainfall: (weatherData.rainfall || 0) / 2
+      };
+
+      // 예측 요청
+      const endpoint = selectedModel 
+        ? `${API_BASE_URL}/predict/${selectedModel}` 
+        : `${API_BASE_URL}/predict/`;
+      
+      const response = await axios.post(endpoint, weatherInputs);
+      
+      // 결과에 현재 날씨 정보 추가
+      const resultWithWeather = {
+        ...response.data,
+        currentWeather: currentWeather
+      };
+      
+      setPrediction(resultWithWeather);
+      
+    } catch (err) {
+      console.error('현재 날씨 기반 예측 오류:', err);
+      setError(err.response?.data?.detail || '예측 중 오류가 발생했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // 차트 데이터 생성
   const generateChartData = async () => {
     const tempChartData = [];
     const baseTemp = inputs.avgTemp;
     
-    for (let tempDiff = -10; tempDiff <= 10; tempDiff += 1) {
+    for (let tempDiff = -10; tempDiff <= 10; tempDiff += 2) {
       const tempValue = baseTemp + tempDiff;
       
       // 기온 변화를 적용한 새로운 입력값
@@ -112,6 +165,266 @@ const WindSpeedPredictor = () => {
     // 온도 순으로 정렬
     tempChartData.sort((a, b) => a.temperature - b.temperature);
     setChartData(tempChartData);
+  };
+
+  // 현재 날씨 데이터 가져오기
+   const fetchCurrentWeather = async () => {
+    setLoadingWeather(true);
+    setError(null);
+
+    try {
+      // 현재 시간 정보 생성
+      const now = new Date();
+      const baseDate = now.getFullYear() +
+        String(now.getMonth() + 1).padStart(2, '0') +
+        String(now.getDate()).padStart(2, '0');
+
+      // 매시각 40분 이전이면 이전 시각의 발표 데이터 사용
+      let baseTime;
+      if (now.getMinutes() < 40) {
+        const prevHour = new Date(now);
+        prevHour.setHours(prevHour.getHours() - 1);
+        baseTime = String(prevHour.getHours()).padStart(2, '0') + '00';
+      } else {
+        baseTime = String(now.getHours()).padStart(2, '0') + '00';
+      }
+
+      // API 요청 파라미터
+      const params = {
+        serviceKey: KMA_SERVICE_KEY,
+        numOfRows: 10,
+        pageNo: 1,
+        dataType: 'JSON',
+        base_date: baseDate,
+        base_time: baseTime,
+        nx: FORECAST_NX,
+        ny: FORECAST_NY
+      };
+
+      // **콘솔 로그 추가: API 요청 URL과 파라미터 확인**
+      console.log('fetchCurrentWeather API Request URL:', `${KMA_API_URL}/getUltraSrtNcst`);
+      console.log('fetchCurrentWeather API Request Params:', params);
+
+      // API 요청
+      const response = await axios.get(`${KMA_API_URL}/getUltraSrtNcst`, { params });
+
+      // **콘솔 로그 추가: API 응답 전체 데이터 확인**
+      console.log('fetchCurrentWeather API Response:', response);
+
+      // 결과 처리
+      if (response.data.response.header.resultCode === '00') {
+        const items = response.data.response.body.items.item;
+        const weatherData = {
+          location: '인천광역시 미추홀구 용현1.4동',
+          date: baseDate,
+          time: baseTime,
+          weather: {}
+        };
+
+        // 데이터 매핑
+        for (const item of items) {
+          const category = item.category;
+          const value = item.obsrValue;
+
+          switch (category) {
+            case 'T1H': // 기온
+              weatherData.weather.temperature = parseFloat(value);
+              break;
+            case 'RN1': // 1시간 강수량
+              weatherData.weather.rainfall = parseFloat(value);
+              break;
+            case 'REH': // 습도
+              weatherData.weather.humidity = parseFloat(value);
+              break;
+            case 'WSD': // 풍속
+              weatherData.weather.windSpeed = parseFloat(value);
+              break;
+            case 'PTY': // 강수형태
+              weatherData.weather.precipitationType = getPrecipitationType(value);
+              break;
+            default:
+              break;
+          }
+        }
+
+        setCurrentWeather(weatherData);
+
+        // 현재 날씨 데이터로 입력값 업데이트
+        setInputs(prev => ({
+          ...prev,
+          avgHumidity: weatherData.weather.humidity || prev.avgHumidity,
+          minHumidity: Math.max(20, (weatherData.weather.humidity || prev.avgHumidity) - 10),
+          avgTemp: weatherData.weather.temperature || prev.avgTemp,
+          maxTemp: (weatherData.weather.temperature || prev.avgTemp) + 5,
+          minTemp: (weatherData.weather.temperature || prev.avgTemp) - 5,
+          rainfall: weatherData.weather.rainfall || prev.rainfall,
+          maxHourlyRainfall: (weatherData.weather.rainfall || prev.rainfall) / 2
+        }));
+      } else {
+        // **콘솔 로그 추가: API 에러 메시지 확인**
+        console.error('fetchCurrentWeather API Error Response Header:', response.data.response.header);
+        throw new Error(response.data.response.header.resultMsg);
+      }
+    } catch (err) {
+      console.error('현재 날씨 데이터 조회 오류:', err);
+      // **콘솔 로그 추가: 에러 객체 전체 확인**
+      console.error('fetchCurrentWeather Error Object:', err);
+      setError('현재 날씨 데이터를 가져오지 못했습니다. API 키와 네트워크 연결을 확인하세요.');
+    } finally {
+      setLoadingWeather(false);
+    }
+  };
+
+  // 단기 예보 데이터 가져오기
+  const fetchShortForecast = async () => {
+    setLoadingWeather(true);
+    setError(null);
+
+    try {
+      // **[수정]: 한국 시간 기준 현재 시간**
+      const now = new Date();
+      const utcNow = new Date(now.getTime() + now.getTimezoneOffset() * 60000); // UTC로 변환
+      const koreaNow = new Date(utcNow.getTime() + 9 * 60 * 60000); // UTC+9 (한국 시간)
+
+      let baseDate = koreaNow.getFullYear() +
+        String(koreaNow.getMonth() + 1).padStart(2, '0') +
+        String(koreaNow.getDate()).padStart(2, '0');
+
+      // **[수정]: 발표 시각 목록 및 현재 시간에 맞는 base_time 설정**
+      const forecastTimes = ["0200", "0500", "0800", "1100", "1400", "1700", "2000", "2300"];
+      let baseTime;
+      const currentHour = koreaNow.getHours();
+
+      if (currentHour < 2) {
+        baseTime = "2300";
+        const yesterday = new Date(koreaNow);
+        yesterday.setDate(yesterday.getDate() - 1);
+        baseDate = yesterday.getFullYear() +
+          String(yesterday.getMonth() + 1).padStart(2, '0') +
+          String(yesterday.getDate()).padStart(2, '0');
+      } else if (currentHour < 5) {
+        baseTime = "0200";
+      } else if (currentHour < 8) {
+        baseTime = "0500";
+      } else if (currentHour < 11) {
+        baseTime = "0800";
+      } else if (currentHour < 14) {
+        baseTime = "1100";
+      } else if (currentHour < 17) {
+        baseTime = "1400";
+      } else if (currentHour < 20) {
+        baseTime = "1700";
+      } else if (currentHour < 23) {
+        baseTime = "2000";
+      } else {
+        baseTime = "2300";
+      }
+
+
+      const params = {
+        serviceKey: KMA_SERVICE_KEY,
+        numOfRows: 1000,
+        pageNo: 1,
+        dataType: 'JSON',
+        base_date: baseDate,
+        base_time: baseTime,
+        nx: FORECAST_NX,
+        ny: FORECAST_NY
+      };
+
+      // **콘솔 로그 추가: API 요청 URL과 파라미터 확인**
+      console.log('fetchShortForecast API Request URL:', `${KMA_API_URL}/getVilageFcst`);
+      console.log('fetchShortForecast API Request Params:', params);
+
+      // API 요청
+      const response = await axios.get(`${KMA_API_URL}/getVilageFcst`, { params });
+
+      // **콘솔 로그 추가: API 응답 전체 데이터 확인**
+      console.log('fetchShortForecast API Response:', response);
+
+      // 결과 처리
+      if (response.data.response.header.resultCode === '00') {
+        const items = response.data.response.body.items.item;
+
+        // 날짜-시간별로 데이터 그룹화
+        const forecastData = {};
+
+        for (const item of items) {
+          const fcstDate = item.fcstDate;
+          const fcstTime = item.fcstTime;
+          const category = item.category;
+          const value = item.fcstValue;
+
+          const key = `${fcstDate}-${fcstTime}`;
+
+          if (!forecastData[key]) {
+            forecastData[key] = {
+              date: fcstDate,
+              time: fcstTime,
+              weather: {}
+            };
+          }
+
+          // 카테고리별 처리
+          switch (category) {
+            case 'TMP': // 기온
+              forecastData[key].weather.temperature = parseFloat(value);
+              break;
+            case 'REH': // 습도
+              forecastData[key].weather.humidity = parseFloat(value);
+              break;
+            case 'WSD': // 풍속
+              forecastData[key].weather.windSpeed = parseFloat(value);
+              break;
+            case 'SKY': // 하늘상태
+              forecastData[key].weather.skyCondition = getSkyCondition(value);
+              break;
+            case 'PTY': // 강수형태
+              forecastData[key].weather.precipitationType = getPrecipitationType(value);
+              break;
+            case 'POP': // 강수확률
+              forecastData[key].weather.precipitationProbability = parseInt(value);
+              break;
+            default:
+              break;
+          }
+        }
+
+        // 리스트로 변환하여 정렬
+        const forecast = {
+          location: '인천광역시 미추홀구 용현1.4동',
+          baseDate,
+          baseTime,
+          forecasts: Object.values(forecastData).sort((a, b) =>
+            `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)
+          )
+        };
+
+        setWeatherForecast(forecast);
+
+        // 첫 번째 예보 데이터로 예보 입력값 업데이트
+        if (forecast.forecasts.length > 0) {
+          const firstForecast = forecast.forecasts[0].weather;
+          setForecastInputs(prev => ({
+            ...prev,
+            avgHumidity: firstForecast.humidity || prev.avgHumidity,
+            avgTemp: firstForecast.temperature || prev.avgTemp,
+            rainfallProb: firstForecast.precipitationProbability || prev.rainfallProb
+          }));
+        }
+      } else {
+        // **콘솔 로그 추가: API 에러 메시지 확인**
+        console.error('fetchShortForecast API Error Response Header:', response.data.response.header);
+        throw new Error(response.data.response.header.resultMsg);
+      }
+    } catch (err) {
+      console.error('단기 예보 데이터 조회 오류:', err);
+      // **콘솔 로그 추가: 에러 객체 전체 확인**
+      console.error('fetchShortForecast Error Object:', err);
+      setError('단기 예보 데이터를 가져오지 못했습니다. API 키와 네트워크 연결을 확인하세요.');
+    } finally {
+      setLoadingWeather(false);
+    }
   };
 
   // 파일 선택 처리
@@ -304,7 +617,32 @@ const WindSpeedPredictor = () => {
     fetchModels();
   }, []);
 
-  // 풍속 단계 판정 함수는 그대로 사용
+  // 강수형태 코드 변환
+  const getPrecipitationType = (code) => {
+    const codeMap = {
+      '0': '없음',
+      '1': '비',
+      '2': '비/눈',
+      '3': '눈',
+      '4': '소나기',
+      '5': '빗방울',
+      '6': '빗방울눈날림',
+      '7': '눈날림'
+    };
+    return codeMap[code] || '알 수 없음';
+  };
+
+  // 하늘상태 코드 변환
+  const getSkyCondition = (code) => {
+    const codeMap = {
+      '1': '맑음',
+      '3': '구름많음',
+      '4': '흐림'
+    };
+    return codeMap[code] || '알 수 없음';
+  };
+
+  // 풍속 단계 판정 함수
   const getWindLevel = (speed) => {
     if (speed < 0.3) return { level: '고요', description: '바람이 거의 없음' };
     if (speed < 1.6) return { level: '미풍', description: '가벼운 바람' };
@@ -317,6 +655,29 @@ const WindSpeedPredictor = () => {
     return { level: '폭풍 이상', description: '구조물 손상 가능성' };
   };
 
+  // 날짜 포맷팅 함수
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '';
+    
+    // YYYYMMDD 형식을 YYYY-MM-DD로 변환
+    const year = dateStr.substring(0, 4);
+    const month = dateStr.substring(4, 6);
+    const day = dateStr.substring(6, 8);
+    
+    return `${year}-${month}-${day}`;
+  };
+
+  // 시간 포맷팅 함수
+  const formatTime = (timeStr) => {
+    if (!timeStr) return '';
+    
+    // HHMM 형식을 HH:MM로 변환
+    const hour = timeStr.substring(0, 2);
+    const minute = timeStr.substring(2, 4);
+    
+    return `${hour}:${minute}`;
+  };
+
   // 탭 메뉴
   const renderTabs = () => (
     <div className="mb-6 border-b border-gray-200">
@@ -327,6 +688,17 @@ const WindSpeedPredictor = () => {
             onClick={() => setActiveTab('predict')}
           >
             풍속 예측
+          </button>
+        </li>
+        <li className="mr-2">
+          <button 
+            className={`inline-block p-4 rounded-t-lg ${activeTab === 'realtime' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-600'}`}
+            onClick={() => {
+              setActiveTab('realtime');
+              fetchCurrentWeather();
+            }}
+          >
+            실시간 예측
           </button>
         </li>
         <li className="mr-2">
@@ -348,7 +720,10 @@ const WindSpeedPredictor = () => {
         <li className="mr-2">
           <button 
             className={`inline-block p-4 rounded-t-lg ${activeTab === 'forecast' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-600'}`}
-            onClick={() => setActiveTab('forecast')}
+            onClick={() => {
+              setActiveTab('forecast');
+              fetchShortForecast();
+            }}
           >
             날씨 예보
           </button>
@@ -607,6 +982,160 @@ const WindSpeedPredictor = () => {
             
             <div className="text-sm text-gray-500 mt-2">
               <p>* 이 예측은 모델을 기반으로 하며, 실제 기상 조건에 따라 달라질 수 있습니다.</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  // 실시간 예측 탭 렌더링
+  const renderRealtimeTab = () => (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      {/* 현재 날씨 정보 */}
+      <div className="bg-white p-6 rounded shadow">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold">현재 날씨 정보</h2>
+          <button 
+            onClick={fetchCurrentWeather}
+            disabled={loadingWeather}
+            className={`px-4 py-2 rounded transition ${loadingWeather ? 'bg-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+          >
+            {loadingWeather ? '로딩 중...' : '새로고침'}
+          </button>
+        </div>
+        
+        {loadingWeather ? (
+          <div className="text-center py-8">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <p className="text-blue-600">날씨 데이터를 불러오는 중...</p>
+          </div>
+        ) : !currentWeather ? (
+          <div className="text-center py-8 text-gray-500">
+            <p>날씨 데이터를 불러올 수 없습니다. '새로고침' 버튼을 눌러주세요.</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <div className="text-center">
+              <h3 className="text-lg font-semibold">{currentWeather.location}</h3>
+              <p className="text-sm text-gray-500">
+                {formatDate(currentWeather.date)} {formatTime(currentWeather.time)}
+              </p>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-blue-50 p-4 rounded">
+                <h4 className="text-sm font-medium text-gray-500">기온</h4>
+                <p className="text-2xl font-bold">{currentWeather.weather.temperature}°C</p>
+              </div>
+              
+              <div className="bg-blue-50 p-4 rounded">
+                <h4 className="text-sm font-medium text-gray-500">습도</h4>
+                <p className="text-2xl font-bold">{currentWeather.weather.humidity}%</p>
+              </div>
+              
+              <div className="bg-blue-50 p-4 rounded">
+                <h4 className="text-sm font-medium text-gray-500">강수량</h4>
+                <p className="text-2xl font-bold">{currentWeather.weather.rainfall}mm</p>
+              </div>
+              
+              <div className="bg-blue-50 p-4 rounded">
+                <h4 className="text-sm font-medium text-gray-500">풍속</h4>
+                <p className="text-2xl font-bold">{currentWeather.weather.windSpeed}m/s</p>
+              </div>
+            </div>
+            
+            {currentWeather.weather.precipitationType && (
+              <div className="bg-gray-100 p-4 rounded">
+                <h4 className="text-sm font-medium text-gray-500">강수 형태</h4>
+                <p className="text-xl font-bold">{currentWeather.weather.precipitationType}</p>
+              </div>
+            )}
+            
+            <button
+              onClick={handlePredictWithCurrentWeather}
+              disabled={loading}
+              className={`w-full py-2 px-4 rounded transition ${loading ? 'bg-gray-400' : 'bg-green-600 text-white hover:bg-green-700'}`}
+            >
+              {loading ? '예측 중...' : '현재 날씨로 풍속 예측하기'}
+            </button>
+          </div>
+        )}
+        
+        {error && (
+          <div className="mt-4 p-3 bg-red-100 text-red-700 rounded">
+            {error}
+          </div>
+        )}
+      </div>
+      
+      {/* 예측 결과 */}
+      <div className="bg-white p-6 rounded shadow">
+        <h2 className="text-xl font-semibold mb-4">예측 결과</h2>
+        
+        {prediction === null ? (
+          <div className="text-center py-8 text-gray-500">
+            <p>왼쪽에서 '현재 날씨로 풍속 예측하기' 버튼을 눌러주세요.</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <div className="text-center">
+              <div className="text-5xl font-bold text-blue-600">
+                {prediction.predicted_wind_speed.toFixed(2)} <span className="text-2xl">m/s</span>
+              </div>
+              <p className="mt-2 text-gray-600">예측 평균 풍속</p>
+              <div className="mt-1 text-sm text-gray-500">
+                신뢰도: {(prediction.confidence * 100).toFixed(0)}% | 처리 시간: {prediction.execution_time.toFixed(3)}초
+              </div>
+            </div>
+            
+            <div className="bg-gray-100 p-4 rounded">
+              <h3 className="font-semibold">풍속 단계</h3>
+              <div className="mt-2">
+                <div className="text-xl font-bold">{prediction.wind_level}</div>
+                <p className="text-gray-600">{prediction.wind_description}</p>
+              </div>
+            </div>
+            
+            {currentWeather && currentWeather.weather.windSpeed && (
+              <div className="bg-yellow-50 p-4 rounded">
+                <h3 className="font-semibold">실제 관측 풍속</h3>
+                <div className="mt-2">
+                  <div className="text-xl font-bold">{currentWeather.weather.windSpeed} m/s</div>
+                  <p className="text-gray-600">{getWindLevel(currentWeather.weather.windSpeed).level}</p>
+                </div>
+                <div className="mt-2 text-sm text-gray-500">
+                  <p>예측값과 실제값 차이: {Math.abs(prediction.predicted_wind_speed - currentWeather.weather.windSpeed).toFixed(2)} m/s</p>
+                </div>
+              </div>
+            )}
+            
+            {prediction.feature_importance && (
+              <div>
+                <h3 className="font-semibold mb-2">특성 중요도</h3>
+                <div className="h-48">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={Object.entries(prediction.feature_importance)
+                        .map(([feature, importance]) => ({ feature, importance: Math.abs(importance) }))
+                        .sort((a, b) => b.importance - a.importance)}
+                      layout="vertical"
+                      margin={{ top: 5, right: 30, left: 100, bottom: 5 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis type="number" />
+                      <YAxis dataKey="feature" type="category" width={100} />
+                      <Tooltip formatter={(value) => [value.toFixed(4), '중요도']} />
+                      <Bar dataKey="importance" fill="#8884d8" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+            
+            <div className="text-sm text-gray-500 mt-2">
+              <p>* 이 예측은 모델을 기반으로 하며, 실제 기상 조건과 차이가 있을 수 있습니다.</p>
+              <p>* 실시간 날씨 데이터는 기상청 API를 통해 제공됩니다.</p>
             </div>
           </div>
         )}
@@ -956,11 +1485,109 @@ const WindSpeedPredictor = () => {
   // 날씨 예보 탭 렌더링
   const renderForecastTab = () => (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-      {/* 입력 폼 */}
+      {/* 날씨 예보 정보 */}
       <div className="bg-white p-6 rounded shadow">
-        <h2 className="text-xl font-semibold mb-4">날씨 예보 데이터 입력</h2>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold">예보 정보</h2>
+          <button 
+            onClick={fetchShortForecast}
+            disabled={loadingWeather}
+            className={`px-4 py-2 rounded transition ${loadingWeather ? 'bg-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+          >
+            {loadingWeather ? '로딩 중...' : '예보 가져오기'}
+          </button>
+        </div>
         
-        <div className="space-y-4">
+        {loadingWeather ? (
+          <div className="text-center py-8">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <p className="text-blue-600">예보 데이터를 불러오는 중...</p>
+          </div>
+        ) : !weatherForecast ? (
+          <div className="text-center py-8 text-gray-500">
+            <p>예보 데이터를 불러올 수 없습니다. '예보 가져오기' 버튼을 눌러주세요.</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <div className="text-center">
+              <h3 className="text-lg font-semibold">{weatherForecast.location}</h3>
+              <p className="text-sm text-gray-500">
+                기준: {formatDate(weatherForecast.baseDate)} {formatTime(weatherForecast.baseTime)}
+              </p>
+            </div>
+            
+            <div className="space-y-4">
+              <h3 className="font-semibold">향후 예보</h3>
+              
+              {weatherForecast.forecasts.slice(0, 5).map((forecast, index) => (
+                <div key={index} className="p-3 bg-blue-50 rounded">
+                  <div className="flex justify-between">
+                    <div>
+                      <p className="font-medium">{formatDate(forecast.date)} {formatTime(forecast.time)}</p>
+                    </div>
+                    <div>
+                      {forecast.weather.skyCondition && (
+                        <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">{forecast.weather.skyCondition}</span>
+                      )}
+                      {forecast.weather.precipitationType && forecast.weather.precipitationType !== '없음' && (
+                        <span className="text-sm bg-green-100 text-green-800 px-2 py-1 rounded ml-2">{forecast.weather.precipitationType}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 mt-2">
+                    <div>
+                      <p className="text-xs text-gray-500">기온</p>
+                      <p className="font-bold">{forecast.weather.temperature}°C</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">습도</p>
+                      <p className="font-bold">{forecast.weather.humidity}%</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">강수확률</p>
+                      <p className="font-bold">{forecast.weather.precipitationProbability}%</p>
+                    </div>
+                  </div>
+                  <div className="mt-2">
+                    <button
+                      onClick={() => {
+                        setForecastInputs({
+                          date: formatDate(forecast.date),
+                          location: weatherForecast.location,
+                          avgHumidity: forecast.weather.humidity || 60,
+                          avgTemp: forecast.weather.temperature || 20,
+                          rainfallProb: forecast.weather.precipitationProbability || 0
+                        });
+                      }}
+                      className="px-2 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition"
+                    >
+                      이 날씨로 예측하기
+                    </button>
+                  </div>
+                </div>
+              ))}
+              
+              {weatherForecast.forecasts.length > 5 && (
+                <div className="text-center">
+                  <p className="text-sm text-gray-500">총 {weatherForecast.forecasts.length}개의 예보 중 5개만 표시됩니다.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        
+        {error && (
+          <div className="mt-4 p-3 bg-red-100 text-red-700 rounded">
+            {error}
+          </div>
+        )}
+      </div>
+      
+      {/* 예측 결과 */}
+      <div className="bg-white p-6 rounded shadow">
+        <h2 className="text-xl font-semibold mb-4">풍속 예측</h2>
+        
+        <div className="space-y-4 mb-6">
           <div>
             <label className="block text-sm font-medium mb-1">날짜</label>
             <input
@@ -1044,28 +1671,13 @@ const WindSpeedPredictor = () => {
           >
             {loading ? '예측 중...' : '풍속 예측하기'}
           </button>
-          
-          {error && (
-            <div className="mt-4 p-3 bg-red-100 text-red-700 rounded">
-              {error}
-            </div>
-          )}
         </div>
-      </div>
-      
-      {/* 예측 결과 */}
-      <div className="bg-white p-6 rounded shadow">
-        <h2 className="text-xl font-semibold mb-4">예보 결과</h2>
         
-        {prediction === null ? (
-          <div className="text-center py-8 text-gray-500">
-            <p>왼쪽 폼에서 날씨 예보 데이터를 입력하고 예측 버튼을 눌러주세요.</p>
-          </div>
-        ) : (
+        {prediction && (
           <div className="space-y-6">
             <div className="text-center">
               <div className="text-2xl font-bold">
-                {prediction.location} - {prediction.forecast_date}
+                {prediction.location || forecastInputs.location} - {prediction.forecast_date || forecastInputs.date}
               </div>
               <div className="text-5xl font-bold text-blue-600 mt-4">
                 {prediction.predicted_wind_speed.toFixed(2)} <span className="text-2xl">m/s</span>
@@ -1082,18 +1694,19 @@ const WindSpeedPredictor = () => {
             </div>
             
             <div className="bg-blue-50 p-4 rounded">
-              <h3 className="font-semibold">날씨 조건</h3>
+              <h3 className="font-semibold">예보 조건</h3>
               <div className="mt-2 space-y-2">
                 <p><span className="font-medium">평균 습도:</span> {forecastInputs.avgHumidity}%</p>
                 <p><span className="font-medium">평균 기온:</span> {forecastInputs.avgTemp}°C</p>
                 <p><span className="font-medium">강수 확률:</span> {forecastInputs.rainfallProb}%</p>
               </div>
             </div>
-            
-            <div className="text-sm text-gray-500 mt-2">
-              <p>* 이 예측은 모델을 기반으로 하며, 실제 기상 조건에 따라 달라질 수 있습니다.</p>
-              <p>* 정확한 일기 예보는 기상청에 문의하세요.</p>
-            </div>
+          </div>
+        )}
+        
+        {error && (
+          <div className="mt-4 p-3 bg-red-100 text-red-700 rounded">
+            {error}
           </div>
         )}
       </div>
@@ -1102,17 +1715,19 @@ const WindSpeedPredictor = () => {
 
   return (
     <div className="flex flex-col p-6 max-w-6xl mx-auto bg-gray-50 min-h-screen">
-      <h1 className="text-3xl font-bold mb-6 text-center text-gray-800">풍속 예측 시스템</h1>
+      <h1 className="text-3xl font-bold mb-2 text-center text-gray-800">풍속 예측 시스템</h1>
+      <p className="text-center text-gray-600 mb-6">기상청 API 연동 인천광역시 미추홀구 용현1.4동 날씨 기반</p>
       
       {renderTabs()}
       
       {activeTab === 'predict' && renderPredictTab()}
+      {activeTab === 'realtime' && renderRealtimeTab()}
       {activeTab === 'train' && renderTrainTab()}
       {activeTab === 'models' && renderModelsTab()}
       {activeTab === 'forecast' && renderForecastTab()}
       
       <div className="mt-8 text-center text-gray-500 text-sm">
-        <p>풍속 예측 시스템 v1.0.0 &copy; {new Date().getFullYear()}</p>
+        <p>풍속 예측 시스템 v1.1.0 &copy; {new Date().getFullYear()} - 기상청 단기예보 API 활용</p>
       </div>
     </div>
   );

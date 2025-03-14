@@ -17,11 +17,21 @@ from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.exceptions import NotFittedError
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 import weather_router  
+
+# 환경변수 로드
+load_dotenv()
+
+# 파일 경로 설정
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+MODEL_DIR = os.getenv("MODEL_DIR", "models")
+CACHE_DIR = os.getenv("CACHE_DIR", "cache")
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = int(os.getenv("PORT", 8000))
+
 # FastAPI 애플리케이션 생성
-app = FastAPI(title="풍속 예측 API", description="기상 데이터를 기반으로 풍속을 예측하는 API", version="1.0.0")
+app = FastAPI(title="풍속 예측 API", description="기상 데이터를 기반으로 풍속을 예측하는 API", version="1.1.0")
 
 # CORS 설정 - React 앱과 통신 허용
 app.add_middleware(
@@ -32,12 +42,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 날씨 라우터 등록
 app.include_router(weather_router.router)
-
-# 파일 경로 설정
-UPLOAD_DIR = "uploads"
-MODEL_DIR = "models"
-CACHE_DIR = "cache"
 
 # 디렉토리 생성
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -119,9 +125,6 @@ def load_model(model_path: str = DEFAULT_MODEL_PATH):
         return create_default_model()
 
 # 기본 모델 생성 함수
-# 기본 모델 생성 함수 수정
-# 기본 모델 생성 함수 수정
-# 기본 모델 생성 함수 수정
 def create_default_model():
     # 간단한 샘플 데이터로 모델 학습
     X_sample = np.array([
@@ -276,14 +279,27 @@ def read_csv_with_skip(file_path: str):
     CP1252 인코딩의 CSV 파일을 읽고 필요한 데이터만 추출합니다.
     """
     try:
-        # CP1252 인코딩으로 파일 읽기
-        df = pd.read_csv(file_path, encoding='cp1252')
+        # 다양한 인코딩으로 시도
+        encodings = ['cp1252', 'utf-8', 'euc-kr']
+        
+        for encoding in encodings:
+            try:
+                df = pd.read_csv(file_path, encoding=encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+            except Exception as e:
+                print(f"CSV 파일 읽기 오류 ({encoding}): {e}")
+                continue
+        else:
+            # 모든 인코딩이 실패한 경우
+            raise ValueError("지원되는 모든 인코딩으로 파일을 읽을 수 없습니다.")
         
         # 열 이름 확인 및 필요한 열만 추출
         columns = df.columns.tolist()
         
         # 각 파일 유형에 따라 필요한 열 식별
-        if 'ÀÏ½Ã' in columns:  # 일시 열 존재
+        if 'ÀÏ½Ã' in columns:  # 일시 열 존재 (CP1252 인코딩)
             # 파일 유형에 따라 다른 처리
             if 'Æò±ÕÇ³¼Ó(m/s)' in columns:  # 풍속 데이터
                 return df[['ÀÏ½Ã', 'Æò±ÕÇ³¼Ó(m/s)', 'ÃÖ´ëÇ³¼Ó(m/s)']]
@@ -296,6 +312,20 @@ def read_csv_with_skip(file_path: str):
                 
             elif '°­¼ö·®(mm)' in columns:  # 강수량 데이터
                 return df[['ÀÏ½Ã', '°­¼ö·®(mm)', '1½Ã°£ÃÖ´Ù°­¼ö·®(mm)']]
+        
+        elif '일시' in columns:  # UTF-8 또는 EUC-KR 인코딩
+            # 파일 유형에 따라 다른 처리
+            if '평균풍속(m/s)' in columns:  # 풍속 데이터
+                return df[['일시', '평균풍속(m/s)', '최대풍속(m/s)']]
+                
+            elif '평균습도(%rh)' in columns:  # 습도 데이터
+                return df[['일시', '평균습도(%rh)', '최저습도(%rh)']]
+                
+            elif '평균기온(℃)' in columns:  # 온도 데이터
+                return df[['일시', '평균기온(℃)', '최고기온(℃)', '최저기온(℃)']]
+                
+            elif '강수량(mm)' in columns:  # 강수량 데이터
+                return df[['일시', '강수량(mm)', '1시간최다강수량(mm)']]
         
         # 열 이름을 찾을 수 없는 경우
         print(f"CSV 파일 '{file_path}'의 열 이름: {columns}")
@@ -669,12 +699,13 @@ async def forecast_wind(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"예보 중 오류: {str(e)}")
 
+# 현재 날씨 기반 예측 API
 @app.post("/api/predict/with-weather/")
 async def predict_with_weather():
     """현재 날씨 데이터를 기반으로 풍속을 예측합니다."""
     try:
         # 현재 날씨 데이터 가져오기
-        current_weather = await get_current_weather()
+        current_weather = await weather_router.get_current_weather()
         
         # 날씨 데이터로 예측 요청 생성
         request = PredictionRequest(
@@ -700,7 +731,16 @@ async def predict_with_weather():
 # 건강 확인 API
 @app.get("/api/health/")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+    return {
+        "status": "healthy", 
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.1.0",
+        "environment": {
+            "upload_dir": UPLOAD_DIR,
+            "model_dir": MODEL_DIR,
+            "cache_dir": CACHE_DIR
+        }
+    }
 
 # 서버 시작 이벤트
 @app.on_event("startup")
@@ -714,4 +754,4 @@ async def startup_event():
 # 메인 실행 블록
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=HOST, port=PORT)

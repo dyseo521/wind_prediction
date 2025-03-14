@@ -18,6 +18,10 @@ services:
       - UPLOAD_DIR=/app/uploads
       - MODEL_DIR=/app/models
       - CACHE_DIR=/app/cache
+      - KMA_API_URL=http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0
+      - KMA_SERVICE_KEY=KfAWEKmNrqS3o2aFs8feAWHuxQ5tJ0caYYbb8%2FpmMHjK4HqE6MYCZ3xDQMh4r8lOT1yiEmK8N%2BiC17kH55ap3A%3D%3D
+      - FORECAST_NX=54
+      - FORECAST_NY=124
     restart: unless-stopped
 
   # 프론트엔드 서비스
@@ -29,6 +33,12 @@ services:
       - "3000:80"
     depends_on:
       - backend
+    environment:
+      - REACT_APP_KMA_API_URL=http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0
+      - REACT_APP_KMA_SERVICE_KEY=KfAWEKmNrqS3o2aFs8feAWHuxQ5tJ0caYYbb8%2FpmMHjK4HqE6MYCZ3xDQMh4r8lOT1yiEmK8N%2BiC17kH55ap3A%3D%3D
+      - REACT_APP_API_BASE_URL=http://localhost:8000/api
+      - REACT_APP_FORECAST_NX=54
+      - REACT_APP_FORECAST_NY=124
     restart: unless-stopped
 
 volumes:

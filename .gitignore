@@ -1,0 +1,48 @@
+# 백업 파일
+*.bak
+*.backup
+*~
+
+# 데이터 파일
+/data
+*.csv
+*.xlsx
+*.xls
+
+# 사용자 설정 파일
+config.local.js
+settings.local.json
+
+# Docker 관련
+.dockerignore
+docker-compose.override.yml
+
+# Python 관련 추가 항목
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 로그 파일 및 데이터베이스
+*.log
+*.sqlite
+*.db
+
+# JWT 또는 인증 관련 파일
+*.pem
+*.key
+/secrets

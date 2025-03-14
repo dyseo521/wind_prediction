@@ -2,17 +2,22 @@ from fastapi import APIRouter, HTTPException
 import requests
 from datetime import datetime, timedelta
 import json
+import os
+from dotenv import load_dotenv
+
+# 환경변수 로드
+load_dotenv()
 
 # 라우터 설정
 router = APIRouter(prefix="/api/weather", tags=["weather"])
 
 # 기상청 API 설정
-KMA_API_URL = "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0"
-SERVICE_KEY = "여기에_발급받은_서비스키_입력"  # URL 인코딩된 키 사용
+KMA_API_URL = os.getenv("KMA_API_URL", "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0")
+SERVICE_KEY = os.getenv("KMA_SERVICE_KEY", "")  # URL 인코딩된 키 사용
 
 # 지역 설정 (인천광역시 미추홀구 용현1.4동)
-NX = 54
-NY = 124
+NX = int(os.getenv("FORECAST_NX", 54))
+NY = int(os.getenv("FORECAST_NY", 124))
 
 @router.get("/current")
 async def get_current_weather():
