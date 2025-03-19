@@ -18,7 +18,8 @@ from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.exceptions import NotFittedError
 from dotenv import load_dotenv
-import weather_router  
+import weather_router
+import traceback
 
 # 환경변수 로드
 load_dotenv()
@@ -31,7 +32,9 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", 8000))
 
 # FastAPI 애플리케이션 생성
-app = FastAPI(title="풍속 예측 API", description="기상 데이터를 기반으로 풍속을 예측하는 API", version="1.1.0")
+app = FastAPI(title="풍속 예측 및 전력 발전량 통합 시스템", 
+              description="기상 데이터를 기반으로 풍속 및 전력 발전량을 예측하는 API", 
+              version="2.0.0")
 
 # CORS 설정 - React 앱과 통신 허용
 app.add_middleware(
@@ -41,9 +44,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# 날씨 라우터 등록
-app.include_router(weather_router.router)
 
 # 디렉토리 생성
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -276,7 +276,7 @@ def make_prediction(request_data, model_path=None):
 # CSV 파일 읽기 함수
 def read_csv_with_skip(file_path: str):
     """
-    CP1252 인코딩의 CSV 파일을 읽고 필요한 데이터만 추출합니다.
+    CSV 파일을 읽고 필요한 데이터만 추출합니다.
     """
     try:
         # 다양한 인코딩으로 시도
@@ -313,19 +313,34 @@ def read_csv_with_skip(file_path: str):
             elif '°­¼ö·®(mm)' in columns:  # 강수량 데이터
                 return df[['ÀÏ½Ã', '°­¼ö·®(mm)', '1½Ã°£ÃÖ´Ù°­¼ö·®(mm)']]
         
-        elif '일시' in columns:  # UTF-8 또는 EUC-KR 인코딩
+        elif 'Date' in columns or '일시' in columns:  # UTF-8 또는 EUC-KR 인코딩
+            # 필요한 열 검색 및 고유한 열 이름 사용
+            date_col = 'Date' if 'Date' in columns else '일시'
+            
             # 파일 유형에 따라 다른 처리
-            if '평균풍속(m/s)' in columns:  # 풍속 데이터
-                return df[['일시', '평균풍속(m/s)', '최대풍속(m/s)']]
+            # 풍속 데이터
+            wind_cols = [col for col in columns if 'WindSpeed' in col or '풍속' in col]
+            if wind_cols:
+                required_cols = [date_col] + wind_cols
+                return df[required_cols]
                 
-            elif '평균습도(%rh)' in columns:  # 습도 데이터
-                return df[['일시', '평균습도(%rh)', '최저습도(%rh)']]
+            # 습도 데이터
+            humidity_cols = [col for col in columns if 'Humidity' in col or '습도' in col]
+            if humidity_cols:
+                required_cols = [date_col] + humidity_cols
+                return df[required_cols]
                 
-            elif '평균기온(℃)' in columns:  # 온도 데이터
-                return df[['일시', '평균기온(℃)', '최고기온(℃)', '최저기온(℃)']]
+            # 온도 데이터
+            temp_cols = [col for col in columns if 'Temp' in col or '기온' in col]
+            if temp_cols:
+                required_cols = [date_col] + temp_cols
+                return df[required_cols]
                 
-            elif '강수량(mm)' in columns:  # 강수량 데이터
-                return df[['일시', '강수량(mm)', '1시간최다강수량(mm)']]
+            # 강수량 데이터
+            rain_cols = [col for col in columns if 'Precipitation' in col or '강수량' in col]
+            if rain_cols:
+                required_cols = [date_col] + rain_cols
+                return df[required_cols]
         
         # 열 이름을 찾을 수 없는 경우
         print(f"CSV 파일 '{file_path}'의 열 이름: {columns}")
@@ -344,30 +359,40 @@ def merge_data(wind_df, humidity_df, temp_df, rain_df):
     # 실제 깨진 한글 열 이름 -> 코드에서 사용할 열 이름
     column_mapping = {
         # 일시
-        'ÀÏ½Ã': '일시',
+        'ÀÏ½Ã': 'Date',
+        '일시': 'Date',
         # 풍속 데이터
-        'Æò±ÕÇ³¼Ó(m/s)': '평균풍속(m/s)',
-        'ÃÖ´ëÇ³¼Ó(m/s)': '최대풍속(m/s)',
+        'Æò±ÕÇ³¼Ó(m/s)': 'AvgWindSpeed_mps',
+        '평균풍속(m/s)': 'AvgWindSpeed_mps',
+        'ÃÖ´ëÇ³¼Ó(m/s)': 'MaxWindSpeed_mps',
+        '최대풍속(m/s)': 'MaxWindSpeed_mps',
         # 습도 데이터
-        'Æò±Õ½Àµµ(%rh)': '평균습도(%rh)',
-        'ÃÖÀú½Àµµ(%rh)': '최저습도(%rh)',
+        'Æò±Õ½Àµµ(%rh)': 'AvgHumidity_percent',
+        '평균습도(%rh)': 'AvgHumidity_percent',
+        'ÃÖÀú½Àµµ(%rh)': 'MinHumidity_percent',
+        '최저습도(%rh)': 'MinHumidity_percent',
         # 온도 데이터
-        'Æò±Õ±â¿Â(¡É)': '평균기온(℃)',
-        'ÃÖ°í±â¿Â(¡É)': '최고기온(℃)',
-        'ÃÖÀú±â¿Â(¡É)': '최저기온(℃)',
+        'Æò±Õ±â¿Â(¡É)': 'AvgTemp_C',
+        '평균기온(℃)': 'AvgTemp_C',
+        'ÃÖ°í±â¿Â(¡É)': 'MaxTemp_C',
+        '최고기온(℃)': 'MaxTemp_C',
+        'ÃÖÀú±â¿Â(¡É)': 'MinTemp_C',
+        '최저기온(℃)': 'MinTemp_C',
         # 강수량 데이터
-        '°­¼ö·®(mm)': '강수량(mm)',
-        '1½Ã°£ÃÖ´Ù°­¼ö·®(mm)': '1시간최다강수량(mm)'
+        '°­¼ö·®(mm)': 'Precipitation_mm',
+        '강수량(mm)': 'Precipitation_mm',
+        '1½Ã°£ÃÖ´Ù°­¼ö·®(mm)': 'MaxHourlyPrecipitation_mm',
+        '1시간최다강수량(mm)': 'MaxHourlyPrecipitation_mm'
     }
     
     # 데이터프레임 열 이름 변경
-    wind_df = wind_df.rename(columns=column_mapping)
-    humidity_df = humidity_df.rename(columns=column_mapping)
-    temp_df = temp_df.rename(columns=column_mapping)
-    rain_df = rain_df.rename(columns=column_mapping)
+    wind_df = wind_df.rename(columns=lambda x: column_mapping.get(x, x))
+    humidity_df = humidity_df.rename(columns=lambda x: column_mapping.get(x, x))
+    temp_df = temp_df.rename(columns=lambda x: column_mapping.get(x, x))
+    rain_df = rain_df.rename(columns=lambda x: column_mapping.get(x, x))
     
     # 병합에 사용할 공통 키
-    common_key = '일시'
+    common_key = 'Date'
     
     # 데이터 병합
     merged = wind_df.merge(humidity_df, on=common_key, how='left')
@@ -407,9 +432,9 @@ def train_model_task(
         
         # 특성과 타겟 분리
         feature_columns = [
-            '평균습도(%rh)', '최저습도(%rh)', 
-            '평균기온(℃)', '최고기온(℃)', '최저기온(℃)',
-            '강수량(mm)', '1시간최다강수량(mm)'
+            'AvgHumidity_percent', 'MinHumidity_percent', 
+            'AvgTemp_C', 'MaxTemp_C', 'MinTemp_C',
+            'Precipitation_mm', 'MaxHourlyPrecipitation_mm'
         ]
         
         # 필요한 열이 있는지 확인하고 없으면 대체
@@ -420,20 +445,20 @@ def train_model_task(
             else:
                 # 비슷한 이름의 열 찾기
                 for existing_col in merged_data.columns:
-                    if '습도' in col and '습도' in existing_col:
+                    if 'Humidity' in col and 'Humidity' in existing_col:
                         available_columns.append(existing_col)
                         break
-                    elif '기온' in col and '기온' in existing_col:
+                    elif 'Temp' in col and 'Temp' in existing_col:
                         available_columns.append(existing_col)
                         break
-                    elif '강수량' in col and '강수량' in existing_col:
+                    elif 'Precipitation' in col and 'Precipitation' in existing_col:
                         available_columns.append(existing_col)
                         break
         
         # 타겟 열 확인
         target_column = None
         for col in merged_data.columns:
-            if '평균풍속' in col:
+            if 'WindSpeed' in col and 'Avg' in col:
                 target_column = col
                 break
         
@@ -481,7 +506,7 @@ def train_model_task(
         }
         
         # 특성 이름 가져오기
-        feature_names = [col.split('(')[0] for col in available_columns]
+        feature_names = [col.split('_')[0] for col in available_columns]
         
         # 특성 중요도 계산 (선형 모델)
         feature_importance = [
@@ -547,6 +572,7 @@ def train_model_task(
         return training_result
     except Exception as e:
         print(f"모델 훈련 오류: {e}")
+        traceback.print_exc()
         
         # 오류 기록
         error_result = {
@@ -734,13 +760,34 @@ async def health_check():
     return {
         "status": "healthy", 
         "timestamp": datetime.now().isoformat(),
-        "version": "1.1.0",
+        "version": "2.0.0",
         "environment": {
             "upload_dir": UPLOAD_DIR,
             "model_dir": MODEL_DIR,
             "cache_dir": CACHE_DIR
         }
     }
+
+# 새로운 모듈 로드
+try:
+    # 전력 계산 모듈 및 라우터 로드
+    from power_calculation import PowerCalculator
+    import power_router
+    
+    # 시계열 분석 모듈 로드
+    from time_series_analysis import TimeSeriesAnalyzer
+
+    # 라우터 등록
+    app.include_router(power_router.router)
+    app.include_router(weather_router.router)
+    
+    print("전력 계산 및 시계열 분석 모듈 로드 완료")
+except Exception as e:
+    print(f"추가 모듈 로드 오류: {e}")
+    traceback.print_exc()
+
+# 날씨 라우터 등록 
+app.include_router(weather_router.router)
 
 # 서버 시작 이벤트
 @app.on_event("startup")
@@ -750,6 +797,19 @@ async def startup_event():
         default_model = create_default_model()
         joblib.dump(default_model, DEFAULT_MODEL_PATH)
         print(f"기본 모델 생성 완료: {DEFAULT_MODEL_PATH}")
+        
+    # 추가 모듈 초기화
+    try:
+        # 시계열 분석기 초기화
+        ts_analyzer = TimeSeriesAnalyzer(model_dir=MODEL_DIR)
+        
+        # 기존 모델 로드 시도
+        if not ts_analyzer.load_models():
+            print("시계열 모델이 없습니다. 필요시 학습이 필요합니다.")
+            
+    except Exception as e:
+        print(f"시계열 분석기 초기화 오류: {e}")
+        traceback.print_exc()
 
 # 메인 실행 블록
 if __name__ == "__main__":

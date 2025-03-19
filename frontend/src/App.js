@@ -1,14 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   BarChart, Bar, Cell, PieChart, Pie
 } from 'recharts';
-import axios from 'axios';
+import PowerDashboard from './PowerDashboard';  // 새 전력 대시보드 컴포넌트 임포트
 
 // API 기본 URL 설정 (환경변수 사용)
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000/api';
 
-const WindSpeedPredictor = () => {
+const App = () => {
   // 상태 관리
   const [inputs, setInputs] = useState({
     avgHumidity: 60,
@@ -62,6 +62,20 @@ const WindSpeedPredictor = () => {
     setInputs(prev => ({ ...prev, [name]: parseFloat(value) }));
   };
 
+  // API 호출 함수
+  const fetchData = async (url, options = {}) => {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        throw new Error(`HTTP 오류: ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('API 호출 오류:', error);
+      throw error;
+    }
+  };
+
   // 예측 요청 함수
   const handlePredict = async () => {
     setLoading(true);
@@ -72,14 +86,21 @@ const WindSpeedPredictor = () => {
         ? `${API_BASE_URL}/predict/${selectedModel}` 
         : `${API_BASE_URL}/predict/`;
       
-      const response = await axios.post(endpoint, inputs);
-      setPrediction(response.data);
+      const response = await fetchData(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(inputs),
+      });
+      
+      setPrediction(response);
       
       // 온도 변화에 따른 차트 데이터 생성
       generateChartData();
     } catch (err) {
       console.error('예측 오류:', err);
-      setError(err.response?.data?.detail || '예측 중 오류가 발생했습니다.');
+      setError(err.message || '예측 중 오류가 발생했습니다.');
     } finally {
       setLoading(false);
     }
@@ -96,36 +117,22 @@ const WindSpeedPredictor = () => {
     setError(null);
     
     try {
-      // 현재 날씨 데이터로 입력값 설정
-      const weatherData = currentWeather.weather;
-      const weatherInputs = {
-        avgHumidity: weatherData.humidity || 60,
-        minHumidity: Math.max(20, (weatherData.humidity || 60) - 10),
-        avgTemp: weatherData.temperature || 20,
-        maxTemp: (weatherData.temperature || 20) + 5,
-        minTemp: (weatherData.temperature || 20) - 5,
-        rainfall: weatherData.rainfall || 0,
-        maxHourlyRainfall: (weatherData.rainfall || 0) / 2
-      };
-
       // 예측 요청
-      const endpoint = selectedModel 
-        ? `${API_BASE_URL}/predict/${selectedModel}` 
-        : `${API_BASE_URL}/predict/`;
+      const endpoint = `${API_BASE_URL}/predict/with-weather/`;
       
-      const response = await axios.post(endpoint, weatherInputs);
+      const response = await fetchData(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
       
-      // 결과에 현재 날씨 정보 추가
-      const resultWithWeather = {
-        ...response.data,
-        currentWeather: currentWeather
-      };
-      
-      setPrediction(resultWithWeather);
+      // 예측 결과 저장
+      setPrediction(response);
       
     } catch (err) {
       console.error('현재 날씨 기반 예측 오류:', err);
-      setError(err.response?.data?.detail || '예측 중 오류가 발생했습니다.');
+      setError(err.message || '예측 중 오류가 발생했습니다.');
     } finally {
       setLoading(false);
     }
@@ -148,11 +155,17 @@ const WindSpeedPredictor = () => {
       };
       
       try {
-        const response = await axios.post(`${API_BASE_URL}/predict/`, newInputs);
+        const response = await fetchData(`${API_BASE_URL}/predict/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(newInputs),
+        });
         
         tempChartData.push({
           temperature: tempValue,
-          predictedWindSpeed: response.data.predicted_wind_speed
+          predictedWindSpeed: response.predicted_wind_speed
         });
       } catch (err) {
         console.error('차트 데이터 생성 오류:', err);
@@ -170,21 +183,21 @@ const WindSpeedPredictor = () => {
     setError(null);
 
     try {
-      // 직접 기상청 API를 호출하지 않고 백엔드 API를 통해 호출
-      const response = await axios.get(`${API_BASE_URL}/weather/current`);
+      // 백엔드 API를 통해 호출
+      const response = await fetchData(`${API_BASE_URL}/weather/current`);
       
       // 응답 데이터 확인 및 로깅
-      console.log('Current weather API response:', response.data);
+      console.log('Current weather API response:', response);
       
-      if (!response.data) {
+      if (!response) {
         throw new Error('날씨 데이터가 비어 있습니다.');
       }
       
-      setCurrentWeather(response.data);
+      setCurrentWeather(response);
 
       // 현재 날씨 데이터로 입력값 업데이트
-      if (response.data.weather) {
-        const weatherData = response.data.weather;
+      if (response.weather) {
+        const weatherData = response.weather;
         setInputs(prev => ({
           ...prev,
           avgHumidity: weatherData.humidity || prev.avgHumidity,
@@ -201,18 +214,6 @@ const WindSpeedPredictor = () => {
       
       // 더 자세한 오류 메시지 제공
       let errorMessage = '현재 날씨 데이터를 가져오지 못했습니다.';
-      if (err.response) {
-        console.error('Error response data:', err.response.data);
-        errorMessage += ` 서버 응답 코드: ${err.response.status}`;
-        if (err.response.data && err.response.data.detail) {
-          errorMessage += ` (${err.response.data.detail})`;
-        }
-      } else if (err.request) {
-        errorMessage += ' 서버로부터 응답이 없습니다. 네트워크 연결을 확인하세요.';
-      } else {
-        errorMessage += ` ${err.message}`;
-      }
-      
       setError(errorMessage);
     } finally {
       setLoadingWeather(false);
@@ -225,21 +226,21 @@ const WindSpeedPredictor = () => {
     setError(null);
 
     try {
-      // 직접 기상청 API를 호출하지 않고 백엔드 API를 통해 호출
-      const response = await axios.get(`${API_BASE_URL}/weather/forecast/short`);
+      // 백엔드 API를 통해 호출
+      const response = await fetchData(`${API_BASE_URL}/weather/forecast/short`);
       
       // 응답 데이터 확인 및 로깅
-      console.log('Short forecast API response:', response.data);
+      console.log('Short forecast API response:', response);
       
-      if (!response.data) {
+      if (!response) {
         throw new Error('예보 데이터가 비어 있습니다.');
       }
       
-      setWeatherForecast(response.data);
+      setWeatherForecast(response);
 
       // 첫 번째 예보 데이터로 예보 입력값 업데이트
-      if (response.data.forecasts && response.data.forecasts.length > 0) {
-        const firstForecast = response.data.forecasts[0].weather;
+      if (response.forecasts && response.forecasts.length > 0) {
+        const firstForecast = response.forecasts[0].weather;
         setForecastInputs(prev => ({
           ...prev,
           avgHumidity: firstForecast.humidity || prev.avgHumidity,
@@ -252,18 +253,6 @@ const WindSpeedPredictor = () => {
       
       // 더 자세한 오류 메시지 제공
       let errorMessage = '단기 예보 데이터를 가져오지 못했습니다.';
-      if (err.response) {
-        console.error('Error response data:', err.response.data);
-        errorMessage += ` 서버 응답 코드: ${err.response.status}`;
-        if (err.response.data && err.response.data.detail) {
-          errorMessage += ` (${err.response.data.detail})`;
-        }
-      } else if (err.request) {
-        errorMessage += ' 서버로부터 응답이 없습니다. 네트워크 연결을 확인하세요.';
-      } else {
-        errorMessage += ` ${err.message}`;
-      }
-      
       setError(errorMessage);
     } finally {
       setLoadingWeather(false);
@@ -277,15 +266,15 @@ const WindSpeedPredictor = () => {
     setApiKeyTestResult(null);
     
     try {
-      const response = await axios.get(`${API_BASE_URL}/weather/test-api-key`);
-      console.log('API Key Test Response:', response.data);
-      setApiKeyTestResult(response.data);
+      const response = await fetchData(`${API_BASE_URL}/weather/test-api-key`);
+      console.log('API Key Test Response:', response);
+      setApiKeyTestResult(response);
     } catch (err) {
       console.error('API 키 테스트 오류:', err);
       setError('API 키 테스트 중 오류가 발생했습니다.');
       setApiKeyTestResult({
         status: 'error',
-        message: err.response?.data?.detail || '알 수 없는 오류'
+        message: err.message || '알 수 없는 오류'
       });
     } finally {
       setLoadingWeather(false);
@@ -314,20 +303,22 @@ const WindSpeedPredictor = () => {
       const formData = new FormData();
       formData.append('file', files[fileType]);
       
-      const response = await axios.post(`${API_BASE_URL}/upload/`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        }
+      const response = await fetch(`${API_BASE_URL}/upload/`, {
+        method: 'POST',
+        body: formData
+      }).then(res => {
+        if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
+        return res.json();
       });
       
       setUploadStatus({
         ...uploadStatus,
-        [fileType]: response.data.file_id
+        [fileType]: response.file_id
       });
       
     } catch (err) {
       console.error('파일 업로드 오류:', err);
-      setError(err.response?.data?.detail || '파일 업로드 중 오류가 발생했습니다.');
+      setError(err.message || '파일 업로드 중 오류가 발생했습니다.');
     } finally {
       setLoading(false);
     }
@@ -360,29 +351,35 @@ const WindSpeedPredictor = () => {
     });
     
     try {
-      const response = await axios.post(`${API_BASE_URL}/train/`, {
-        wind_file_id: uploadStatus.wind,
-        humidity_file_id: uploadStatus.humidity,
-        temp_file_id: uploadStatus.temp,
-        rain_file_id: uploadStatus.rain,
-        test_size: trainingParams.testSize,
-        alpha: trainingParams.alpha,
-        polynomial_degree: trainingParams.polynomialDegree
+      const response = await fetchData(`${API_BASE_URL}/train/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          wind_file_id: uploadStatus.wind,
+          humidity_file_id: uploadStatus.humidity,
+          temp_file_id: uploadStatus.temp,
+          rain_file_id: uploadStatus.rain,
+          test_size: trainingParams.testSize,
+          alpha: trainingParams.alpha,
+          polynomial_degree: trainingParams.polynomialDegree
+        }),
       });
       
       // 훈련 상태 확인을 위한 모델 ID 저장
       setTrainStatus({
         status: 'started',
-        model_id: response.data.model_id,
+        model_id: response.model_id,
         message: '모델 훈련이 시작되었습니다. 잠시 후 상태를 확인하세요.'
       });
       
       // 훈련 상태 폴링 시작
-      pollTrainingStatus(response.data.model_id);
+      pollTrainingStatus(response.model_id);
       
     } catch (err) {
       console.error('모델 훈련 오류:', err);
-      setError(err.response?.data?.detail || '모델 훈련 중 오류가 발생했습니다.');
+      setError(err.message || '모델 훈련 중 오류가 발생했습니다.');
       setTrainStatus({
         status: 'failed',
         message: '모델 훈련에 실패했습니다.'
@@ -395,23 +392,23 @@ const WindSpeedPredictor = () => {
   // 훈련 상태 폴링 함수
   const pollTrainingStatus = async (modelId) => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/training_status/${modelId}`);
+      const response = await fetchData(`${API_BASE_URL}/training_status/${modelId}`);
       
-      if (response.data.status === 'completed') {
+      if (response.status === 'completed') {
         setTrainStatus({
           status: 'completed',
           model_id: modelId,
-          result: response.data,
+          result: response,
           message: '모델 훈련이 완료되었습니다.'
         });
         
         // 모델 목록 갱신
         fetchModels();
         return;
-      } else if (response.data.status === 'failed') {
+      } else if (response.status === 'failed') {
         setTrainStatus({
           status: 'failed',
-          message: `모델 훈련에 실패했습니다: ${response.data.error || '알 수 없는 오류'}`
+          message: `모델 훈련에 실패했습니다: ${response.error || '알 수 없는 오류'}`
         });
         return;
       }
@@ -431,8 +428,8 @@ const WindSpeedPredictor = () => {
   // 모델 목록 조회
   const fetchModels = async () => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/models/`);
-      setModels(response.data.models);
+      const response = await fetchData(`${API_BASE_URL}/models/`);
+      setModels(response.models);
     } catch (err) {
       console.error('모델 목록 조회 오류:', err);
       setError('모델 목록을 가져오는 중 오류가 발생했습니다.');
@@ -466,45 +463,22 @@ const WindSpeedPredictor = () => {
       formData.append('avg_temp', forecastInputs.avgTemp);
       formData.append('rainfall_prob', forecastInputs.rainfallProb);
       
-      const response = await axios.post(`${API_BASE_URL}/forecast/`, formData);
-      setPrediction(response.data);
+      const response = await fetch(`${API_BASE_URL}/forecast/`, {
+        method: 'POST',
+        body: formData
+      }).then(res => {
+        if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
+        return res.json();
+      });
+      
+      setPrediction(response);
       
     } catch (err) {
       console.error('예보 오류:', err);
-      setError(err.response?.data?.detail || '예보 중 오류가 발생했습니다.');
+      setError(err.message || '예보 중 오류가 발생했습니다.');
     } finally {
       setLoading(false);
     }
-  };
-
-  // 초기 데이터 로드
-  useEffect(() => {
-    fetchModels();
-  }, []);
-
-  // 강수형태 코드 변환
-  const getPrecipitationType = (code) => {
-    const codeMap = {
-      '0': '없음',
-      '1': '비',
-      '2': '비/눈',
-      '3': '눈',
-      '4': '소나기',
-      '5': '빗방울',
-      '6': '빗방울눈날림',
-      '7': '눈날림'
-    };
-    return codeMap[code] || '알 수 없음';
-  };
-
-  // 하늘상태 코드 변환
-  const getSkyCondition = (code) => {
-    const codeMap = {
-      '1': '맑음',
-      '3': '구름많음',
-      '4': '흐림'
-    };
-    return codeMap[code] || '알 수 없음';
   };
 
   // 풍속 단계 판정 함수
@@ -591,6 +565,14 @@ const WindSpeedPredictor = () => {
             }}
           >
             날씨 예보
+          </button>
+        </li>
+        <li className="mr-2">
+          <button 
+            className={`inline-block p-4 rounded-t-lg ${activeTab === 'power' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-600'}`}
+            onClick={() => setActiveTab('power')}
+          >
+            전력 대시보드
           </button>
         </li>
       </ul>
@@ -1602,24 +1584,40 @@ const WindSpeedPredictor = () => {
     </div>
   );
 
+  // 탭 컨텐츠 렌더링
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case 'predict':
+        return renderPredictTab();
+      case 'realtime':
+        return renderRealtimeTab();
+      case 'train':
+        return renderTrainTab();
+      case 'models':
+        return renderModelsTab();
+      case 'forecast':
+        return renderForecastTab();
+      case 'power':
+        return <PowerDashboard />;
+      default:
+        return renderPredictTab();
+    }
+  };
+
   return (
     <div className="flex flex-col p-6 max-w-6xl mx-auto bg-gray-50 min-h-screen">
-      <h1 className="text-3xl font-bold mb-2 text-center text-gray-800">풍속 예측 시스템</h1>
+      <h1 className="text-3xl font-bold mb-2 text-center text-gray-800">풍속 예측 및 전력 발전량 통합 시스템</h1>
       <p className="text-center text-gray-600 mb-6">기상청 API 연동 인천광역시 미추홀구 용현1.4동 날씨 기반</p>
       
       {renderTabs()}
       
-      {activeTab === 'predict' && renderPredictTab()}
-      {activeTab === 'realtime' && renderRealtimeTab()}
-      {activeTab === 'train' && renderTrainTab()}
-      {activeTab === 'models' && renderModelsTab()}
-      {activeTab === 'forecast' && renderForecastTab()}
+      {renderTabContent()}
       
       <div className="mt-8 text-center text-gray-500 text-sm">
-        <p>풍속 예측 시스템 v1.1.0 &copy; {new Date().getFullYear()} - 기상청 단기예보 API 활용</p>
+        <p>풍속 예측 및 전력 발전량 통합 시스템 v2.0.0 &copy; {new Date().getFullYear()} - 기상청 단기예보 API 활용</p>
       </div>
     </div>
   );
 };
 
-export default WindSpeedPredictor;
+export default App;
