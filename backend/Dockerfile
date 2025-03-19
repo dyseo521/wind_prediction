@@ -26,6 +26,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 애플리케이션 코드 복사
 COPY app.py .
 COPY weather_router.py .
+COPY power_calculation.py .
+COPY power_router.py .
+COPY time_series_analysis.py .
 
 # .env 파일 복사 (존재하는 경우)
 COPY .env .env
